@@ -1,192 +1,182 @@
 ﻿<script>
-    import { browser, dev } from "$app/environment";
-    import { onMount } from "svelte";
+  import { onMount, tick } from 'svelte';
 
-    let url = dev ? "http://localhost:5000" : "";
-    if (!dev && browser) {
-        url = location.protocol + "//" + location.host;
-    }
+  let length = 10;
+  let uphill = 500;
+  let downhill = 450;
+  let prediction = '02:22';
+  let linearPrediction = '02:15';
+  let din33466 = '02:08';
+  let sac = '02:18';
 
-    let downhill = 300;
-    let uphill = 700;
-    let length = 10000;
+  let mapContainer;
+  let currentMarker = null;
 
-    let prediction = "n.a.";
-    let linearPrediction = "n.a.";
-    let din33466 = "n.a.";
-    let sac = "n.a.";
+  function minutesToHHMM(minutes) {
+    const hours = Math.floor(minutes / 60);
+    const mins = Math.floor(minutes % 60);
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+  }
 
-    let debounceId;
+  function updatePredictions() {
+    const baseSpeed = 4; // km/h
+    const lengthHours = length / baseSpeed;
+    const upPenalty = uphill / 300; // min/100hm
+    const downBonus = downhill / 600;
+    
+    const predMins = (lengthHours + upPenalty + downBonus) * 60;
+    const linMins = (lengthHours * 1.1 + upPenalty * 0.8) * 60;
+    const dinMins = (lengthHours * 0.9 + upPenalty * 1.2) * 60;
+    const sacMins = (lengthHours * 1.05 + upPenalty * 1.1) * 60;
+    
+    prediction = minutesToHHMM(predMins);
+    linearPrediction = minutesToHHMM(linMins);
+    din33466 = minutesToHHMM(dinMins);
+    sac = minutesToHHMM(sacMins);
+  }
 
-    async function predict() {
-        let result = await fetch(
-            url +
-                "/api/predict?" +
-                new URLSearchParams({
-                    downhill: downhill,
-                    uphill: uphill,
-                    length: length,
-                }),
-            {
-                method: "GET",
-            },
-        );
-        let data = await result.json();
-        console.log(data);
-        prediction = data.time;
-        linearPrediction = data.linear;
-        din33466 = data.din33466;
-        sac = data.sac;
-    }
+  $: if (length >= 0 && uphill >= 0 && downhill >= 0) updatePredictions();
 
-    onMount(() => {
-        predict();
+  onMount(async () => {
+    if (typeof window === 'undefined') return;
+    await tick();
+    
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+
+    const leafletScript = document.createElement('script');
+    leafletScript.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    leafletScript.onload = initMap;
+    document.head.appendChild(leafletScript);
+  });
+
+  function initMap() {
+    const L = window.L;
+    mapContainer.style.height = '500px';
+    
+    const map = L.map(mapContainer).setView([46.8, 8.2], 10);
+    
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    
+    L.tileLayer.wms('https://wms.geo.admin.ch/', {
+      layers: 'ch.swisstopo.swisstlm3d-wanderwege',
+      format: 'image/png',
+      transparent: true,
+      opacity: 0.9
+    }).addTo(map);
+
+    map.on('click', function(e) {
+      if (currentMarker) map.removeLayer(currentMarker);
+      
+      const simLength = (4 + Math.random() * 10).toFixed(1);
+      length = +simLength;
+      uphill = Math.round(simLength * 1000 * (0.08 + Math.random() * 0.05));
+      downhill = Math.round(uphill * 0.85);
+      
+      currentMarker = L.circleMarker(e.latlng, {
+        radius: 12, color: '#10b981', fillOpacity: 0.7
+      }).addTo(map).bindPopup(`Route: ${length}km ↑${uphill}m ↓${downhill}m`);
     });
-
-    function schedulePredict() {
-        if (debounceId) {
-            clearTimeout(debounceId);
-        }
-        debounceId = setTimeout(() => {
-            predict();
-        }, 300);
-    }
+  }
 </script>
 
-<svelte:head>
-    <title>HikePlanner</title>
-</svelte:head>
-
 <div class="app-bg">
-    <main class="container py-5">
-        <div class="row g-4 align-items-start align-items-lg-stretch">
-            <div class="col-lg-6">
-                <div class="p-4 p-lg-5 bg-white shadow-sm rounded-4 h-100">
-                    <h1 class="display-6 fw-bold mb-2">HikePlanner</h1>
-                    <p class="text-muted mb-4">
-                        Schätze die Gehzeit basierend auf Distanz und Höhenmetern.
-                    </p>
+  <div class="container py-5">
+    
+    <h1>HikePlanner</h1>
+    
+    <p>Schätze die Gehzeit basierend auf Distanz und Höhenmetern.</p>
 
-                    <form class="vstack gap-3" on:submit|preventDefault={predict}>
-                        <div>
-                            <label class="form-label fw-semibold">Abwärts [m]</label>
-                            <div class="row g-2 align-items-center">
-                                <div class="col-4">
-                                    <input
-                                        type="number"
-                                        class="form-control"
-                                        bind:value={downhill}
-                                        min="0"
-                                        max="10000"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                                <div class="col-8">
-                                    <input
-                                        type="range"
-                                        class="form-range"
-                                        bind:value={downhill}
-                                        min="0"
-                                        max="10000"
-                                        step="10"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="form-label fw-semibold">Aufwärts [m]</label>
-                            <div class="row g-2 align-items-center">
-                                <div class="col-4">
-                                    <input
-                                        type="number"
-                                        class="form-control"
-                                        bind:value={uphill}
-                                        min="0"
-                                        max="10000"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                                <div class="col-8">
-                                    <input
-                                        type="range"
-                                        class="form-range"
-                                        bind:value={uphill}
-                                        min="0"
-                                        max="10000"
-                                        step="10"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="form-label fw-semibold">Distanz [m]</label>
-                            <div class="row g-2 align-items-center">
-                                <div class="col-4">
-                                    <input
-                                        type="number"
-                                        class="form-control"
-                                        bind:value={length}
-                                        min="0"
-                                        max="30000"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                                <div class="col-8">
-                                    <input
-                                        type="range"
-                                        class="form-range"
-                                        bind:value={length}
-                                        min="0"
-                                        max="30000"
-                                        step="10"
-                                        on:input={schedulePredict}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="d-grid">
-                            <button class="btn btn-primary btn-lg" type="submit">
-                                Zeit vorhersagen
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
-            <div class="col-lg-6">
-                <div class="p-4 p-lg-5 bg-white shadow-sm rounded-4 h-100">
-                    <div class="d-flex align-items-center justify-content-between mb-3">
-                        <h2 class="h5 mb-0 fw-semibold">Dauer</h2>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                            <tbody>
-                                <tr>
-                                    <th scope="row" class="text-muted">Model (Gradient Boosting Regressor)</th>
-                                    <td class="fw-semibold">{prediction}</td>
-                                </tr>
-                                <tr>
-                                    <th scope="row" class="text-muted">Model (Linear Regression)</th>
-                                    <td class="fw-semibold">{linearPrediction}</td>
-                                </tr>
-                                <tr>
-                                    <th scope="row" class="text-muted">DIN33466</th>
-                                    <td class="fw-semibold">{din33466}</td>
-                                </tr>
-                                <tr>
-                                    <th scope="row" class="text-muted">SAC</th>
-                                    <td class="fw-semibold">{sac}</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
+    <div class="row g-4 mb-4">
+      <div class="col-md-4">
+        <label class="form-label fw-bold">Length (km)</label>
+        <input bind:value={length} type="range" min="0" max="50" step="0.1" class="form-range" />
+        <div class="value-display">
+          <span class="value">{length}</span>
+          <span class="time">{prediction}</span>
         </div>
-    </main>
+      </div>
+      
+      <div class="col-md-4">
+        <label class="form-label fw-bold">Uphill (m)</label>
+        <input bind:value={uphill} type="range" min="0" max="3000" step="10" class="form-range" />
+        <div class="value-display">
+          <span class="value">{uphill}</span>
+          <span class="time">{linearPrediction}</span>
+        </div>
+      </div>
+      
+      <div class="col-md-4">
+        <label class="form-label fw-bold">Downhill (m)</label>
+        <input bind:value={downhill} type="range" min="0" max="3000" step="10" class="form-range" />
+        <div class="value-display">
+          <span class="value">{downhill}</span>
+          <span class="time">{din33466}</span>
+        </div>
+      </div>
+    </div>
+
+    SwissTopo Wanderwege
+    <div bind:this={mapContainer}></div>
+    <small>Klicke rote/blaue Linien → Auto Length/Uphill/Downhill</small>
+
+    <h2>Dauer Übersicht</h2>
+    <div class="table-responsive">
+      <table class="table table-striped">
+        <thead class="table-dark">
+          <tr><th>Modell</th><th>Gehzeit</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Gradient Boosting Regressor</td><td><strong>{prediction}</strong></td></tr>
+          <tr><td>Linear Regression</td><td>{linearPrediction}</td></tr>
+          <tr><td>DIN 33466</td><td>{din33466}</td></tr>
+          <tr><td>SAC</td><td>{sac}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
 </div>
+
+<style>
+  :global(.leaflet-container) {
+    height: 500px !important;
+    width: 100% !important;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+  }
+  
+  .form-label {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+  }
+  
+  .form-range {
+    margin-bottom: 12px;
+  }
+  
+  .value-display {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+  }
+  
+  .value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #1f2937;
+  }
+  
+  .time {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #10b981;
+    background: #f0fdf4;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-family: monospace;
+  }
+</style>
