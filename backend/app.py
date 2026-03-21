@@ -79,6 +79,15 @@ app = Flask(__name__, static_url_path='/', static_folder='../frontend/build')
 def indexPage():
      return send_file("../frontend/build/index.html")  
 
+@app.route("/<path:path>")
+def catch_all(path):
+    if path.startswith("api/"):
+        return "API Route", 404
+    try:
+        return send_file("../frontend/build/" + path)
+    except FileNotFoundError:
+        return send_file("../frontend/build/index.html")
+
 @app.route("/api/predict")
 def hello_world():
     downhill = request.args.get('downhill', default = 0, type = int)
