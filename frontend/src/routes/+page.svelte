@@ -8,35 +8,34 @@
   let linearPrediction = '02:15';
   let din33466 = '02:08';
   let sac = '02:18';
+  let loading = false;
+  let errorMsg = '';
 
   let mapContainer;
   let currentMarker = null;
   let map;
 
-  function minutesToHHMM(minutes) {
-    const hours = Math.floor(minutes / 60);
-    const mins = Math.floor(minutes % 60);
-    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  // Slider → /api/predict
+  async function fetchPredict() {
+    const params = new URLSearchParams({
+      downhill: Math.round(downhill),
+      uphill: Math.round(uphill),
+      length: Math.round(length * 1000)  // Backend erwartet Meter!
+    });
+    try {
+      const res = await fetch(`/api/predict?${params}`);
+      const data = await res.json();
+      prediction      = data.time     ?? prediction;
+      linearPrediction= data.linear   ?? linearPrediction;
+      din33466        = data.din33466 ?? din33466;
+      sac             = data.sac      ?? sac;
+    } catch (e) {
+      console.error('predict Fehler:', e);
+    }
   }
 
-  function updatePredictions() {
-    const baseSpeed = 4;
-    const lengthHours = length / baseSpeed;
-    const upPenalty = uphill / 300;
-    const downBonus = downhill / 600;
-
-    const predMins = (lengthHours + upPenalty + downBonus) * 60;
-    const linMins = (lengthHours * 1.1 + upPenalty * 0.8) * 60;
-    const dinMins = (lengthHours * 0.9 + upPenalty * 1.2) * 60;
-    const sacMins = (lengthHours * 1.05 + upPenalty * 1.1) * 60;
-
-    prediction = minutesToHHMM(predMins);
-    linearPrediction = minutesToHHMM(linMins);
-    din33466 = minutesToHHMM(dinMins);
-    sac = minutesToHHMM(sacMins);
-  }
-
-  $: if (length >= 0 && uphill >= 0 && downhill >= 0) updatePredictions();
+  // Reaktiv: bei Slider-Änderung
+  $: if (length >= 0 && uphill >= 0 && downhill >= 0) fetchPredict();
 
   onMount(async () => {
     if (typeof window === 'undefined') return;
@@ -53,10 +52,10 @@
     document.head.appendChild(leafletScript);
   });
 
+// Interaktive Karte
   function initMap() {
     const L = window.L;
     mapContainer.style.height = '500px';
-    mapContainer.style.width = '100%';
 
     map = L.map(mapContainer).setView([46.8, 8.2], 10);
 
@@ -72,6 +71,7 @@
     map.on('click', handleMapClick);
   }
 
+  // Map-Klick → /api/hiking
   async function handleMapClick(e) {
     if (currentMarker) {
       map.removeLayer(currentMarker);
@@ -83,38 +83,45 @@
       color: '#10b981',
       weight: 3,
       fillOpacity: 0.7
-    }).addTo(map);
+    }).addTo(map).bindPopup('⏳ Route wird geladen...').openPopup();
 
-    const params = new URLSearchParams({
-      route: 'hiking',
-      lat: e.latlng.lat,
-      lng: e.latlng.lng
-    });
+    loading = true;
+    errorMsg = '';
 
     try {
-      const res = await fetch(`/api/predict?${params.toString()}`);
-      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const res = await fetch(`/api/hiking?lat=${e.latlng.lat}&lng=${e.latlng.lng}`);
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
 
       const data = await res.json();
 
-      if (typeof data.length !== 'undefined') length = Number(data.length);
-      if (typeof data.uphill !== 'undefined') uphill = Number(data.uphill);
-      if (typeof data.downhill !== 'undefined') downhill = Number(data.downhill);
+      // Backened-Werte setzen
+      length   = Number(data.length)   ?? length;
+      uphill   = Number(data.uphill)   ?? uphill;
+      downhill = Number(data.downhill) ?? downhill;
 
-      if (data.time) prediction = data.time;
-      if (data.linear) linearPrediction = data.linear;
-      if (data.din33466) din33466 = data.din33466;
-      if (data.sac) sac = data.sac;
+      // Zeiten direkt vom Backend (inkl. ML-Predictions)
+      prediction       = data.time     ?? prediction;
+      linearPrediction = data.linear   ?? linearPrediction;
+      din33466         = data.din33466 ?? din33466;
+      sac              = data.sac      ?? sac;
 
-      currentMarker.bindPopup(
-        `Route geladen!<br>
-         Length: ${length} km<br>
-         Uphill: ${uphill} m<br>
-         Downhill: ${downhill} m`
+      currentMarker.setPopupContent(
+        `<b>✅ Route geladen</b><br>
+         📏 ${length} km<br>
+         ⬆️ ${uphill} m<br>
+         ⬇️ ${downhill} m`
       ).openPopup();
+
     } catch (err) {
-      console.error('Route API fehlgeschlagen:', err);
-      currentMarker.bindPopup('Route konnte nicht geladen werden').openPopup();
+      errorMsg = `Fehler: ${err.message}`;
+      currentMarker.setPopupContent(`❌ ${errorMsg}`).openPopup();
+      console.error('hiking API Fehler:', err);
+    } finally {
+      loading = false;
     }
   }
 </script>
@@ -122,8 +129,11 @@
 <div class="app-bg">
   <div class="container py-5">
     <h1>HikePlanner</h1>
-
     <p>Schätze die Gehzeit basierend auf Distanz und Höhenmetern.</p>
+
+    {#if errorMsg}
+      <div class="alert alert-danger">{errorMsg}</div>
+    {/if}
 
     <div class="row g-4 mb-4">
       <div class="col-md-4">
@@ -131,7 +141,6 @@
         <input bind:value={length} type="range" min="0" max="50" step="0.1" class="form-range" />
         <div class="value-display">
           <span class="value">{length}</span>
-          <span class="time">{prediction}</span>
         </div>
       </div>
 
@@ -140,7 +149,6 @@
         <input bind:value={uphill} type="range" min="0" max="3000" step="10" class="form-range" />
         <div class="value-display">
           <span class="value">{uphill}</span>
-          <span class="time">{linearPrediction}</span>
         </div>
       </div>
 
@@ -149,29 +157,28 @@
         <input bind:value={downhill} type="range" min="0" max="3000" step="10" class="form-range" />
         <div class="value-display">
           <span class="value">{downhill}</span>
-          <span class="time">{din33466}</span>
         </div>
       </div>
     </div>
 
-    SwissTopo Wanderwege
-    <div bind:this={mapContainer}></div>
-    <small>Klicke rote/blaue Linien → Route via API laden</small>
+    <p class="text-muted small">
+      {#if loading}⏳ Lade SwissTopo Route...{:else}Klicke auf einen Wanderweg → echte Distanz, Höhen &amp; Zeiten{/if}
+    </p>
 
-    <h2>Dauer Übersicht</h2>
-    <div class="table-responsive">
-      <table class="table table-striped">
-        <thead class="table-dark">
-          <tr><th>Modell</th><th>Gehzeit</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Gradient Boosting Regressor</td><td><strong>{prediction}</strong></td></tr>
-          <tr><td>Linear Regression</td><td>{linearPrediction}</td></tr>
-          <tr><td>DIN 33466</td><td>{din33466}</td></tr>
-          <tr><td>SAC</td><td>{sac}</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <div bind:this={mapContainer}></div>
+
+    <h2 class="mt-4">Dauer Übersicht</h2>
+    <table class="table table-striped">
+      <thead class="table-dark">
+        <tr><th>Modell</th><th>Gehzeit</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Gradient Boosting Regressor</td><td><strong>{prediction}</strong></td></tr>
+        <tr><td>Linear Regression</td><td>{linearPrediction}</td></tr>
+        <tr><td>DIN 33466</td><td>{din33466}</td></tr>
+        <tr><td>SAC</td><td>{sac}</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -182,20 +189,17 @@
     border: 2px solid #dee2e6;
     border-radius: 8px;
   }
-
   .value-display {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-top: 4px;
   }
-
   .value {
     font-size: 1.4rem;
     font-weight: 700;
     color: #1f2937;
   }
-
   .time {
     font-size: 1.1rem;
     font-weight: 600;
