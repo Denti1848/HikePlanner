@@ -1,4 +1,3 @@
-
 import datetime
 import os
 import pickle
@@ -8,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 ENV_STORAGE_KEY = "AZURE_STORAGE_CONNECTION_STRING"
@@ -30,7 +29,7 @@ if ENV_STORAGE_KEY in os.environ:
     )
     model_folder = f"{MODEL_CONTAINER_PREFIX}-{suffix}"
     print(f"using version {model_folder}")
-
+    
     container_client = blob_service_client.get_container_client(model_folder)
     blob_list = list(container_client.list_blobs())
 
@@ -74,33 +73,23 @@ def timedelta_minutes(seconds):
 print("\n*** Flask Backend ***")
 app = Flask(__name__)
 cors = CORS(app)
+#ND app = Flask(__name__, static_url_path='/', static_folder='../frontend/build')
 app = Flask(__name__, static_folder='/usr/src/app/frontend/build')
 app.static_url_path = '/'
 
 
+@app.route("/")
+def indexPage():
+     return send_file("../frontend/build/index.html")  
 
-
-
-
-@app.route("/api/hiking")
-def get_hiking_route():
-    lat = float(request.args.get('lat', 46.8))
-    lng = float(request.args.get('lng', 8.2))
-
-    # Simuliere SwissTopo Route-Daten (ersetze durch echte API)
-    import random
-    sim_length = 4 + random.random() * 10
-    gradient = 0.08 + random.random() * 0.05
-
-    return jsonify({
-        'length': round(sim_length, 1),
-        'uphill': round(sim_length * 1000 * gradient),
-        'downhill': round(sim_length * 1000 * gradient * 0.85),
-        'time': '00:00',
-        'linear': '00:00',
-        'din33466': '00:00',
-        'sac': '00:00'
-    })
+@app.route("/<path:path>")
+def catch_all(path):
+    if path.startswith("api/"):
+        return "API Route", 404
+    try:
+        return send_file("../frontend/build/" + path)
+    except FileNotFoundError:
+        return send_file("../frontend/build/index.html")
 
 @app.route("/api/predict")
 def hello_world():
@@ -118,4 +107,4 @@ def hello_world():
         'linear': timedelta_minutes(linear_prediction),
         'din33466': timedelta_minutes(din33466(uphill=uphill, downhill=downhill, distance=length)),
         'sac': timedelta_minutes(sac(uphill=uphill, downhill=downhill, distance=length))
-    })
+        })
